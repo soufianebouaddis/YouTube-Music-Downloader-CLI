@@ -4,7 +4,6 @@ target/
 !**/src/test/**/target/
 music/
 venv/
-setupAndRun.sh
 ### IntelliJ IDEA ###
 .idea/modules.xml
 .idea/jarRepositories.xml
