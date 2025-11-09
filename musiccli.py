@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-"""
-Stylish YouTube Music Downloader CLI with Queue & Multi-threading
-"""
-
 import os
 import sys
 import threading
@@ -14,28 +9,23 @@ from rich.table import Table
 from rich.live import Live
 from rich.prompt import Prompt
 from rich import box
-from rich.layout import Layout
-from rich.text import Text
 import yt_dlp
-from datetime import datetime
 
 console = Console()
 
-# Global queue and download tracking
 download_queue = Queue()
 active_downloads = {}
 completed_downloads = []
 failed_downloads = []
 queue_lock = threading.Lock()
+stop_display = threading.Event()
 
 def create_music_folder():
-    """Create music folder if it doesn't exist"""
     music_dir = Path("music")
     music_dir.mkdir(exist_ok=True)
     return music_dir
 
 def show_banner():
-    """Display welcome banner"""
     banner = """
     ♪ YouTube Music Downloader ♪
     Multi-threaded Queue System
@@ -48,43 +38,36 @@ def show_banner():
     ))
 
 def create_status_table():
-    """Create a status table showing queue and downloads"""
     table = Table(box=box.ROUNDED, show_header=True, header_style="bold magenta")
     table.add_column("Status", style="cyan", width=12)
     table.add_column("Title", style="white", width=50)
     table.add_column("Progress", style="green", width=20)
     
-    # Show active downloads
     with queue_lock:
         for url, info in active_downloads.items():
             title = info.get('title', 'Fetching info...')[:47] + "..."
             progress = info.get('progress', '0%')
             table.add_row("⬇️ Downloading", title, progress)
         
-        # Show queued items
         queue_size = download_queue.qsize()
         if queue_size > 0:
             table.add_row("⏳ In Queue", f"{queue_size} video(s) waiting", "-")
         
-        # Show last 3 completed
         for item in completed_downloads[-3:]:
             table.add_row("✓ Completed", item[:47] + "...", "100%")
         
-        # Show last 3 failed
         for item in failed_downloads[-3:]:
             table.add_row("✗ Failed", item[:47] + "...", "Error")
     
     return table
 
 def download_worker(music_dir, worker_id):
-    """Worker thread that processes downloads from queue"""
     while True:
         url = download_queue.get()
-        if url is None:  # Poison pill to stop worker
+        if url is None:
             break
         
         try:
-            # Add to active downloads
             with queue_lock:
                 active_downloads[url] = {'title': 'Fetching info...', 'progress': '0%'}
             
@@ -117,15 +100,12 @@ def download_worker(music_dir, worker_id):
                 info = ydl.extract_info(url, download=False)
                 title = info.get('title', 'Unknown')
                 
-                # Update title
                 with queue_lock:
                     if url in active_downloads:
                         active_downloads[url]['title'] = title
                 
-                # Download
                 ydl.download([url])
             
-            # Mark as completed
             with queue_lock:
                 if url in active_downloads:
                     del active_downloads[url]
@@ -142,17 +122,20 @@ def download_worker(music_dir, worker_id):
         finally:
             download_queue.task_done()
 
+def status_display():
+    with Live(create_status_table(), refresh_per_second=2, console=console, screen=False) as live:
+        while not stop_display.is_set():
+            live.update(create_status_table())
+            stop_display.wait(0.5)
+
 def main():
-    """Main CLI loop"""
     console.clear()
     show_banner()
     
-    # Create music directory
     music_dir = create_music_folder()
     console.print(f"[dim]Music will be saved to: {music_dir.absolute()}[/dim]")
     console.print(f"[dim]Using 3 concurrent download threads[/dim]\n")
     
-    # Start worker threads
     num_workers = 3
     workers = []
     for i in range(num_workers):
@@ -160,34 +143,26 @@ def main():
         t.start()
         workers.append(t)
     
-    # Start status display thread
-    def status_display():
-        with Live(create_status_table(), refresh_per_second=2, console=console) as live:
-            while not stop_display.is_set():
-                live.update(create_status_table())
-                stop_display.wait(0.5)
-    
-    stop_display = threading.Event()
     status_thread = threading.Thread(target=status_display, daemon=True)
     status_thread.start()
     
+    console.print("[yellow]Commands:[/yellow]")
+    console.print("[yellow]  - Paste YouTube URL to add to queue[/yellow]")
+    console.print("[yellow]  - 'q' to quit[/yellow]")
+    console.print("[yellow]  - 's' to show status[/yellow]\n")
+    
     try:
-        console.print("\n[yellow]Commands:[/yellow]")
-        console.print("[yellow]  - Paste YouTube URL to add to queue[/yellow]")
-        console.print("[yellow]  - 'q' to quit[/yellow]")
-        console.print("[yellow]  - 's' to show status[/yellow]\n")
-        
         while True:
-            # Prompt for URL
-            url = Prompt.ask("[bold cyan]Enter URL (or command)[/bold cyan]")
+            try:
+                url = console.input("[bold cyan]Enter URL (or command): [/bold cyan]")
+            except EOFError:
+                break
             
-            # Check for quit command
             if url.lower() == 'q':
                 console.print("\n[bold yellow]Waiting for downloads to complete...[/bold yellow]")
-                download_queue.join()  # Wait for all tasks to complete
+                download_queue.join()
                 stop_display.set()
                 
-                # Stop workers
                 for _ in workers:
                     download_queue.put(None)
                 for t in workers:
@@ -198,21 +173,17 @@ def main():
                 console.print(f"[red]✗ Failed: {len(failed_downloads)}[/red]\n")
                 break
             
-            # Show status command
             if url.lower() == 's':
-                console.print()
                 continue
             
-            # Validate URL
             if not url.strip():
-                console.print("[red]Please enter a valid URL[/red]")
+                console.print("[red]Please enter a valid URL[/red]\n")
                 continue
             
             if 'youtube.com' not in url and 'youtu.be' not in url:
-                console.print("[red]Please enter a valid YouTube URL[/red]")
+                console.print("[red]Please enter a valid YouTube URL[/red]\n")
                 continue
             
-            # Add to queue
             download_queue.put(url)
             console.print(f"[green]✓[/green] Added to queue (Queue size: {download_queue.qsize()})\n")
     
